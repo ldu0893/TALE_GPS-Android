@@ -1,0 +1,280 @@
+protected static final int REQUEST_CHECK_SETTINGS = 0x1;
+    protected final static String REQUESTING_LOCATION_UPDATES_KEY = "requesting-location-updates-key";
+    private static final String FILE_NAME = "example.txt";
+
+    private static String txtloc;
+
+    protected Boolean requestingLocationUpdates;
+
+    private TextView textView, txtLocation;
+    private FusedLocationProviderClient fusedLocationClient;
+    private LocationRequest locationRequest;
+    private LocationCallback locationCallback;
+    private String cAddress, homeAddress;
+    private Date cDateLeft;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_g_p_s_locator);
+        txtLocation = (TextView) findViewById(R.id.txtLocation);
+
+        requestingLocationUpdates = false;
+
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
+
+        Intent intent = getIntent();
+        textView = (TextView) findViewById(R.id.print_text);
+        textView.setText(intent.getStringExtra("key"));
+
+        createLocationRequest();
+
+        Location loc = ((Global) this.getApplication()).getmCurrentLocation();
+        txtloc = "";
+        txtLocation.setText(txtloc);
+
+        cAddress = "";
+        homeAddress = "";
+        cDateLeft = null;
+
+        try {
+            FileInputStream fs;
+            fs = openFileInput(FILE_NAME);
+            BufferedReader br = new BufferedReader(new InputStreamReader(fs));
+            for (int i = 0; i < 2; ++i) {
+                System.out.println(br.readLine());
+            }
+            cAddress = br.readLine();
+            homeAddress = cAddress;
+            fs.close();
+            br.close();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        locationCallback = new LocationCallback() {
+            @Override
+            public void onLocationResult(LocationResult locationResult) {
+                if (locationResult == null) {
+                    return;
+                }
+                for (Location loc : locationResult.getLocations()) {
+                    //txtloc += "\n" + loc.getLatitude() + ", " + loc.getLongitude();
+                    Geocoder geocoder;
+                    List<Address> addresses;
+                    geocoder = new Geocoder(getApplicationContext(), Locale.getDefault());
+
+                    try {
+                        addresses = geocoder.getFromLocation(loc.getLatitude(), loc.getLongitude(), 1);
+                        String address = addresses.get(0).getAddressLine(0);
+                        System.out.println("cAddress " + cAddress);
+                        System.out.println("address " + address);
+                        if (cAddress.equals(homeAddress) && !address.equals(homeAddress)) {
+                            Date date = Calendar.getInstance().getTime();
+                            long dateLeft = date.getTime();
+                            cDateLeft = date;
+                            txtloc += "\nLeft home. " + date.toString();
+
+                            FileOutputStream fos = null;
+                            try {
+                                fos = openFileOutput(FILE_NAME, MODE_APPEND | MODE_PRIVATE);
+                                fos.write("\n".getBytes());
+                                fos.write(("l " + dateLeft).getBytes());
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                            } finally {
+                                if (fos != null) {
+                                    try {
+                                        fos.close();
+                                    } catch (IOException e) {
+                                        e.printStackTrace();
+                                    }
+                                }
+                            }
+                        } else if (!cAddress.equals(homeAddress) && address.equals(homeAddress)) {
+                            Date date = Calendar.getInstance().getTime();
+                            Log.d("DATE", ""+date.toString());
+                            Log.d("DATE", ""+cDateLeft.toString());
+                            long dateReturn = date.getTime();
+                            txtloc += "\nBack home. " + date.toString();
+
+                            FileOutputStream fos = null;
+                            try {
+                                fos = openFileOutput(FILE_NAME, MODE_APPEND | MODE_PRIVATE);
+                                fos.write("\n".getBytes());
+                                fos.write(("r " + dateReturn).getBytes());
+                            } catch (Exception e) {
+                                e.printStackTrace();
+                            } finally {
+                                if (fos != null) {
+                                    try {
+                                        fos.close();
+                                    } catch (IOException e) {
+                                        e.printStackTrace();
+                                    }
+                                }
+                            }
+
+                            if (cDateLeft != null) {
+                                //TODO: This looks bad.
+                                long time = date.getTime() - cDateLeft.getTime();
+                                long minutes = 60000;
+                                double timeLeft = ((double)time / minutes);
+                                timeLeft = Math.floor(timeLeft * 100) / 100;
+                                Log.d("DATE", "TIME_LEFT "+timeLeft);
+
+                                sendData(timeLeft);
+
+                            } else {
+                                Log.e("DATE", "DATE_LEFT NULL");
+                            }
+
+                        }
+                        cAddress = address;
+                    } catch (IOException e) {
+                        e.printStackTrace();
+                    }
+                    //System.out.println("IT's GETTING HERE");
+                }
+                txtLocation.setText(txtloc);
+            }
+        };
+
+        updateValuesFromBundle(savedInstanceState);
+
+        startLocationUpdates();
+    }
+
+    private void sendData(double timeLeft) {
+        try {
+            FileInputStream fs;
+            fs = openFileInput(FILE_NAME);
+            BufferedReader br = new BufferedReader(new InputStreamReader(fs));
+            br.readLine();
+            String email = br.readLine()+"@inst.hcpss.org";
+            br.readLine();
+            String school = br.readLine();
+            String json = "school="+school.toLowerCase()+"&email="+email.toLowerCase()+"&minutes_away="+timeLeft;
+//            JSONObject obj = new JSONObject(json);
+            //TODO: Increase robustness of JSON using JSONObject.put
+            Log.d("JSON", json);
+            fs.close();
+            br.close();
+
+            new SendDeviceDetails().execute("http://stayhomeorder.org:8000/data", json);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        stopLocationUpdates();
+    }
+
+    private void stopLocationUpdates() {
+        fusedLocationClient.removeLocationUpdates(locationCallback);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (requestingLocationUpdates) {
+            startLocationUpdates();
+        }
+    }
+
+    protected void createLocationRequest() {
+        locationRequest = LocationRequest.create();
+        locationRequest.setInterval(10000);
+        locationRequest.setFastestInterval(5000);
+        locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
+    }
+
+    private void startLocationUpdates() {
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(
+                    this,
+                    new String [] { android.Manifest.permission.ACCESS_COARSE_LOCATION },
+                    REQUEST_CHECK_SETTINGS //TODO: This is probably wrong.
+            );
+            return;
+        }
+        fusedLocationClient.requestLocationUpdates(locationRequest,
+                locationCallback,
+                Looper.getMainLooper());
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        outState.putBoolean(REQUESTING_LOCATION_UPDATES_KEY,
+                requestingLocationUpdates);
+
+        super.onSaveInstanceState(outState);
+    }
+
+    private void updateValuesFromBundle(Bundle savedInstanceState) {
+        if (savedInstanceState == null) {
+            return;
+        }
+
+        if (savedInstanceState.keySet().contains(REQUESTING_LOCATION_UPDATES_KEY)) {
+            requestingLocationUpdates = savedInstanceState.getBoolean(
+                    REQUESTING_LOCATION_UPDATES_KEY);
+        }
+        //TODO: updateUI();
+    }
+
+    private class SendDeviceDetails extends AsyncTask<String, Void, String> {
+
+        @Override
+        protected String doInBackground(String... params) {
+
+            Log.e("TAG", params[0]);
+            Log.e("TAG", params[1]);
+            String data = "";
+
+            HttpURLConnection httpURLConnection = null;
+            try {
+
+                httpURLConnection = (HttpURLConnection) new URL(params[0]).openConnection();
+                httpURLConnection.setRequestMethod("POST");
+
+                httpURLConnection.setDoOutput(true);
+
+                OutputStreamWriter wr = new OutputStreamWriter(httpURLConnection.getOutputStream());
+                wr.write(params[1]);
+                wr.close();
+
+                InputStream in = httpURLConnection.getInputStream();
+                InputStreamReader inputStreamReader = new InputStreamReader(in);
+
+                int inputStreamData = inputStreamReader.read();
+                while (inputStreamData != -1) {
+                    char current = (char) inputStreamData;
+                    inputStreamData = inputStreamReader.read();
+                    data += current;
+                }
+
+            } catch (Exception e) {
+                e.printStackTrace();
+            } finally {
+                if (httpURLConnection != null) {
+                    httpURLConnection.disconnect();
+                } else {
+                    Log.e("TAG", "CONNECTION NULL");
+                }
+            }
+
+            Log.e("TAG", data);
+            return data;
+        }
+
+        @Override
+        protected void onPostExecute(String result) {
+            super.onPostExecute(result);
+            Log.e("TAG", result); // this is expecting a response code to be sent from your server upon receiving the POST data
+        }
+    }
